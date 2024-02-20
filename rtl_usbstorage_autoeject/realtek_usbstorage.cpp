@@ -1,14 +1,16 @@
 #include <iostream>
 #include <Windows.h>
-#include <SetupAPI.h>
-#pragma comment(lib, "SetupAPI.lib")
 
-// VID_0BDA&PID_1A2B
+#include <SetupAPI.h>
+#include <cfgmgr32.h>
+
+#pragma comment(lib, "SetupAPI.lib")
 
 #define _MAX_SZ_DEVICE_PATH 0x100
 #define _MAX_SZ_DEV_IF_DETAILED_DATA _MAX_SZ_DEVICE_PATH + sizeof(PSP_DEVICE_INTERFACE_DETAIL_DATA_A)
 
 static bool _check_realtek_usbstorage_device(const char* str);
+static bool _check_realtek_parent_pidvid(DEVINST devinst);
 static bool _try_eject_cdrom(const char* path);
 
 int check_realtek_cdrom_disk(void) {
@@ -27,7 +29,11 @@ int check_realtek_cdrom_disk(void) {
 			bool matched = false;
 
 			if (SetupDiGetDeviceInstanceIdA(dev, &dev_data, dev_instance_id, 0x100, NULL)) {
-				matched = _check_realtek_usbstorage_device(dev_instance_id);
+				// matched = _check_realtek_usbstorage_device(dev_instance_id);
+				matched = _check_realtek_parent_pidvid(dev_data.DevInst);
+				if (matched) {
+					printf("Matched device instance: '%s'\n", dev_instance_id);
+				}
 			}
 
 			if (matched) {
@@ -61,6 +67,22 @@ static bool _check_realtek_usbstorage_device(const char* str) {
 	return strstr(str, "VEN_REALTEK&PROD_DRIVER_STORAGE") != NULL;
 }
 
+static bool _check_realtek_parent_pidvid(DEVINST devinst) {
+	DEVINST parent_devinst = NULL;
+	bool match = false;
+	if (CM_Get_Parent(&parent_devinst, devinst, 0) == CR_SUCCESS) {
+		char dev_parent_id[MAX_DEVICE_ID_LEN] = { 0 };
+		if (CM_Get_Device_IDA(parent_devinst, dev_parent_id, MAX_DEVICE_ID_LEN, 0) == CR_SUCCESS) {
+			match = strstr(dev_parent_id, "VID_0BDA") && strstr(dev_parent_id, "PID_1A2B");
+			if (match) {
+				printf("Parent matched: '%s'\n", dev_parent_id);
+			}
+		}
+	}
+
+	return match;
+}
+
 static bool _try_eject_cdrom(const char* path) {
 	DWORD dwBytes;
 	bool ret = false;
@@ -73,6 +95,7 @@ static bool _try_eject_cdrom(const char* path) {
 	}
 
 	if (DeviceIoControl(hCDROM, IOCTL_STORAGE_EJECT_MEDIA, NULL, 0, NULL, 0, &dwBytes, NULL)) {
+		printf("Ejected CDROM: '%s'\n", path);
 		ret = true;
 	}
 	else {

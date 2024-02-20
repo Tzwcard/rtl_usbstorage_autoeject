@@ -20,3 +20,6 @@
 
 ## Remove Service
 ```rtl_usbstorage_autoeject uninstall```
+
+## Standalone mode
+```rtl_usbstorage_autoeject standalone```

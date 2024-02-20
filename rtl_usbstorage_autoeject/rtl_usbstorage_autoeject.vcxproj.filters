@@ -24,9 +24,15 @@
     <ClCompile Include="realtek_usbstorage.cpp">
       <Filter>Source</Filter>
     </ClCompile>
+    <ClCompile Include="notification_message_window.cpp">
+      <Filter>Source</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="realtek_usbstorage.h">
+      <Filter>Header</Filter>
+    </ClInclude>
+    <ClInclude Include="notification_message_window.h">
       <Filter>Header</Filter>
     </ClInclude>
   </ItemGroup>

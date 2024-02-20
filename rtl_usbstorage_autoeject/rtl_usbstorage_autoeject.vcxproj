@@ -128,10 +128,12 @@
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <ClCompile Include="notification_message_window.cpp" />
     <ClCompile Include="realtek_usbstorage.cpp" />
     <ClCompile Include="svc.cpp" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="notification_message_window.h" />
     <ClInclude Include="realtek_usbstorage.h" />
   </ItemGroup>
   <ItemGroup>

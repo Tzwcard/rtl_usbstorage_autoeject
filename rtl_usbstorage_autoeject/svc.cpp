@@ -1,9 +1,11 @@
 /* REF: https://learn.microsoft.com/en-us/windows/win32/services/svc-cpp */
 #include <windows.h>
+#include <dbt.h>
 #include <tchar.h>
 #include <strsafe.h>
 #include "mc/sample.h"
 #include "realtek_usbstorage.h"
+#include "notification_message_window.h"
 
 #pragma comment(lib, "advapi32.lib")
 
@@ -14,17 +16,21 @@
 SERVICE_STATUS          gSvcStatus;
 SERVICE_STATUS_HANDLE   gSvcStatusHandle;
 HANDLE                  ghSvcStopEvent = NULL;
+HANDLE                  hDevNotify = NULL;
 
 VOID SvcInstall(void);
 VOID SvcDelete(void);
-VOID WINAPI SvcCtrlHandler(DWORD);
+VOID SvcStart(void);
+DWORD WINAPI SvcCtrlHandler(DWORD, DWORD, LPVOID, LPVOID);
 VOID WINAPI SvcMain(DWORD, LPTSTR*);
 
 VOID ReportSvcStatus(DWORD, DWORD, DWORD);
 VOID SvcInit(DWORD, LPTSTR*);
 VOID SvcReportEvent(LPTSTR);
 
-DWORD WINAPI SvcMainLoop(LPVOID);
+DWORD WINAPI SvcMainWindow(LPVOID);
+VOID StandaloneMode(void);
+VOID HelpText(TCHAR*);
 
 //
 // Purpose: 
@@ -52,7 +58,28 @@ int __cdecl _tmain(int argc, TCHAR* argv[])
         SvcDelete();
         return 0;
     }
+    else if (!lstrcmpi(argv[1], TEXT("service")))
+    {
+        SvcStart();
+        return 0;
+    }
+    else if (!lstrcmpi(argv[1], TEXT("standalone")))
+    {
+        StandaloneMode();
+        return 0;
+    }
+    else if (!lstrcmpi(argv[1], TEXT("once")))
+    {
+        check_realtek_cdrom_disk();
+        return 0;
+    }
 
+    HelpText(argv[0]);
+
+    return 0;
+}
+
+VOID SvcStart(void) {
     // TO_DO: Add any additional services for the process to this table.
     SERVICE_TABLE_ENTRY DispatchTable[] =
     {
@@ -96,7 +123,7 @@ VOID SvcInstall()
     // "d:\my share\myservice.exe" should be specified as
     // ""d:\my share\myservice.exe"".
     TCHAR szPath[MAX_PATH];
-    StringCbPrintf(szPath, MAX_PATH, TEXT("\"%s\""), szUnquotedPath);
+    StringCbPrintf(szPath, MAX_PATH, TEXT("\"%s\" \"service\""), szUnquotedPath);
 
     // Get a handle to the SCM database. 
 
@@ -333,13 +360,27 @@ VOID WINAPI SvcMain(DWORD dwArgc, LPTSTR* lpszArgv)
 {
     // Register the handler function for the service
 
-    gSvcStatusHandle = RegisterServiceCtrlHandler(
+    gSvcStatusHandle = RegisterServiceCtrlHandlerEx(
         SVCNAME,
-        SvcCtrlHandler);
+        SvcCtrlHandler,
+        NULL);
 
     if (!gSvcStatusHandle)
     {
-        SvcReportEvent((LPTSTR)TEXT("RegisterServiceCtrlHandler"));
+        SvcReportEvent((LPTSTR)TEXT("RegisterServiceCtrlHandlerEx"));
+        return;
+    }
+
+    DEV_BROADCAST_DEVICEINTERFACE notofy_filter = { 0 };
+    notofy_filter.dbcc_size = sizeof(DEV_BROADCAST_DEVICEINTERFACE);
+    notofy_filter.dbcc_devicetype = DBT_DEVTYP_DEVICEINTERFACE;
+    memcpy(&notofy_filter.dbcc_classguid, &GUID_DEVINTERFACE_CDROM, sizeof(GUID));
+
+    hDevNotify = RegisterDeviceNotification(gSvcStatusHandle, &notofy_filter, DEVICE_NOTIFY_SERVICE_HANDLE);
+
+    if (!hDevNotify)
+    {
+        SvcReportEvent((LPTSTR)TEXT("RegisterDeviceNotification"));
         return;
     }
 
@@ -397,8 +438,9 @@ VOID SvcInit(DWORD dwArgc, LPTSTR* lpszArgv)
     ReportSvcStatus(SERVICE_RUNNING, NO_ERROR, 0);
 
     // TO_DO: Perform work until service stops.
-    BOOL main_loop_running = TRUE;
-    HANDLE main_loop_thread = CreateThread(NULL, 0, SvcMainLoop, &main_loop_running, 0, NULL);
+
+    // Run once if the NIC has already been plugged before svc run
+    check_realtek_cdrom_disk();
 
     while (1)
     {
@@ -406,9 +448,9 @@ VOID SvcInit(DWORD dwArgc, LPTSTR* lpszArgv)
 
         WaitForSingleObject(ghSvcStopEvent, INFINITE);
 
-        main_loop_running = FALSE;
-        if (main_loop_thread) {
-            WaitForSingleObject(main_loop_thread, INFINITE);
+        if (hDevNotify) {
+            UnregisterDeviceNotification(hDevNotify);
+            hDevNotify = NULL;
         }
 
         ReportSvcStatus(SERVICE_STOPPED, NO_ERROR, 0);
@@ -460,15 +502,17 @@ VOID ReportSvcStatus(DWORD dwCurrentState,
 //   using the ControlService function.
 //
 // Parameters:
-//   dwCtrl - control code
+//   dwCtrl    - control code
+//   dwEvtType - event type
+//   lpEvtData - event data
+//   lpCtx     - context
 // 
 // Return value:
-//   None
+//   Error code
 //
-VOID WINAPI SvcCtrlHandler(DWORD dwCtrl)
+DWORD WINAPI SvcCtrlHandler(DWORD dwCtrl, DWORD dwEvtType, LPVOID lpEvtData, LPVOID lpCtx)
 {
     // Handle the requested control code. 
-
     switch (dwCtrl)
     {
     case SERVICE_CONTROL_STOP:
@@ -479,15 +523,28 @@ VOID WINAPI SvcCtrlHandler(DWORD dwCtrl)
         SetEvent(ghSvcStopEvent);
         ReportSvcStatus(gSvcStatus.dwCurrentState, NO_ERROR, 0);
 
-        return;
+        return NO_ERROR;
 
     case SERVICE_CONTROL_INTERROGATE:
+        break;
+
+    case SERVICE_CONTROL_DEVICEEVENT:
+        switch (dwEvtType)
+        {
+        case DBT_DEVICEARRIVAL:
+            check_realtek_cdrom_disk();
+            break;
+
+        case DBT_DEVICEREMOVECOMPLETE:
+            break;
+        }
         break;
 
     default:
         break;
     }
 
+    return NO_ERROR;
 }
 
 //
@@ -533,16 +590,40 @@ VOID SvcReportEvent(LPTSTR szFunction)
 }
 
 /************** MAIN LOOP **************/
-DWORD WINAPI SvcMainLoop(LPVOID lpParam) {
+DWORD WINAPI SvcMainWindow(LPVOID lpParam) {
     BOOL* is_running = (BOOL*)lpParam;
     if (!is_running) {
         return ERROR_INVALID_PARAMETER;
     }
 
-    while (*is_running) {
-        check_realtek_cdrom_disk();
-        Sleep(1000);
-    }
+    notify_window_start();
 
     return NO_ERROR;
+}
+
+VOID StandaloneMode(void) {
+    BOOL main_loop_running = TRUE;
+    HANDLE main_loop_thread = CreateThread(NULL, 0,
+        SvcMainWindow,
+        &main_loop_running, 0, NULL);
+
+    if (main_loop_thread) {
+        printf("Running as standalone mode\n");
+        WaitForSingleObject(main_loop_thread, INFINITE);
+        CloseHandle(main_loop_thread);
+    }
+}
+
+VOID HelpText(TCHAR* text) {
+    auto ptr = wcsrchr(text, '/');
+    if (!ptr) {
+        ptr = wcsrchr(text, '\\');
+    }
+
+    printf("Usage: %ws [install|uninstall|standalone|once|service]\n", ptr ? ptr + 1 : text);
+    printf("\t  install : Install as service\n");
+    printf("\tuninstall : Remove service\n");
+    printf("\tstandalone: Run as standalone mode\n");
+    printf("\tonce      : Run the checking once\n");
+    printf("\tservice   : Run as service mode, should only called by Windows service\n");
 }
