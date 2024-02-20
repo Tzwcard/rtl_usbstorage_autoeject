@@ -24,6 +24,7 @@
     <ProjectGuid>{8e4ed08c-9f2b-43dd-b6b9-dbc5d50a896d}</ProjectGuid>
     <RootNamespace>rtlusbstorageautoeject</RootNamespace>
     <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
+    <ProjectName>rtl88x1cu</ProjectName>
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'" Label="Configuration">
