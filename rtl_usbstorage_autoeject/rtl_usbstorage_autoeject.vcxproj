@@ -130,7 +130,7 @@
   <ItemGroup>
     <ClCompile Include="notification_message_window.cpp" />
     <ClCompile Include="realtek_usbstorage.cpp" />
-    <ClCompile Include="svc.cpp" />
+    <ClCompile Include="service.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="notification_message_window.h" />

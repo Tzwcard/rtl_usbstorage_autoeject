@@ -18,7 +18,7 @@
     </Filter>
   </ItemGroup>
   <ItemGroup>
-    <ClCompile Include="svc.cpp">
+    <ClCompile Include="service.cpp">
       <Filter>Source</Filter>
     </ClCompile>
     <ClCompile Include="realtek_usbstorage.cpp">
