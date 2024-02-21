@@ -621,7 +621,7 @@ VOID HelpText(TCHAR* text) {
     }
 
     printf("Usage: %ws [install|uninstall|standalone|once|service]\n", ptr ? ptr + 1 : text);
-    printf("\t  install : Install as service\n");
+    printf("\tinstall   : Install as service\n");
     printf("\tuninstall : Remove service\n");
     printf("\tstandalone: Run as standalone mode\n");
     printf("\tonce      : Run the checking once\n");
