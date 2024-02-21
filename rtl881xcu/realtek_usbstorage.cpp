@@ -10,11 +10,27 @@
 #define _MAX_SZ_DEVICE_PATH 0x100
 #define _MAX_SZ_DEV_IF_DETAILED_DATA _MAX_SZ_DEVICE_PATH + sizeof(PSP_DEVICE_INTERFACE_DETAIL_DATA)
 
-static bool _check_realtek_usbstorage_device(const char* str);
-static bool _check_realtek_parent_pidvid(DEVINST devinst);
+#define IOCTL_SCSI_PASS_THROUGH_DIRECT  CTL_CODE(FILE_DEVICE_CONTROLLER, 0x0405, METHOD_BUFFERED, FILE_READ_ACCESS | FILE_WRITE_ACCESS)
 
-static bool _try_eject_cdrom(LPCWSTR path);
-static bool _try_stop_disk_unit(LPCWSTR path);
+struct SCSI_PASS_THROUGH_DIRECT
+{
+	USHORT Length;
+	UCHAR ScsiStatus;
+	UCHAR PathId;
+	UCHAR TargetId;
+	UCHAR Lun;
+	UCHAR CdbLength;
+	UCHAR SenseInfoLength;
+	UCHAR DataIn;
+	ULONG DataTransferLength;
+	ULONG TimeOutValue;
+	VOID* POINTER_32 DataBuffer;
+	ULONG SenseInfoOffset;
+	UCHAR Cdb[16];
+};
+
+static bool _check_realtek_parent_pidvid(DEVINST devinst);
+static bool _try_enable_nic(LPCWSTR path, int is_disk = 0);
 
 static std::mutex check_mutex;
 
@@ -57,10 +73,10 @@ int check_realtek_cdrom_disk(int is_disk) {
 					unsigned char *bufxx = new unsigned char[_MAX_SZ_DEV_IF_DETAILED_DATA];
 					memset(bufxx, 0, _MAX_SZ_DEV_IF_DETAILED_DATA);
 					PSP_DEVICE_INTERFACE_DETAIL_DATA ptrxx = (PSP_DEVICE_INTERFACE_DETAIL_DATA)bufxx;
-					ptrxx->cbSize = 8;
+					ptrxx->cbSize = sizeof(SP_DEVICE_INTERFACE_DETAIL_DATA);
 					if (SetupDiGetDeviceInterfaceDetail(dev, &dev_if_data, ptrxx, _MAX_SZ_DEV_IF_DETAILED_DATA, 0, NULL)) {
 						// printf("DevPath: %ws\n", ptrxx->DevicePath);
-						bool remove_result = is_disk ? _try_stop_disk_unit(ptrxx->DevicePath) : _try_eject_cdrom(ptrxx->DevicePath);
+						bool remove_result = _try_enable_nic(ptrxx->DevicePath, is_disk ? 1 : 0);
 						if (remove_result) {
 							ret++;
 						}
@@ -77,10 +93,6 @@ int check_realtek_cdrom_disk(int is_disk) {
 	}
 
 	return ret;
-}
-
-static bool _check_realtek_usbstorage_device(const char* str) {
-	return strstr(str, "VEN_REALTEK&PROD_DRIVER_STORAGE") != NULL;
 }
 
 static bool _check_realtek_parent_pidvid(DEVINST devinst) {
@@ -104,60 +116,15 @@ static bool _check_realtek_parent_pidvid(DEVINST devinst) {
 	return match;
 }
 
-#define IOCTL_SCSI_PASS_THROUGH_DIRECT  CTL_CODE(FILE_DEVICE_CONTROLLER, 0x0405, METHOD_BUFFERED, FILE_READ_ACCESS | FILE_WRITE_ACCESS)
-// #define IOCTL_DISK_EJECT_MEDIA       CTL_CODE(FILE_DEVICE_DISK,       0x0202, METHOD_BUFFERED, FILE_READ_ACCESS)
-
-static bool _try_eject_cdrom(LPCWSTR path) {
+static bool _try_enable_nic(LPCWSTR path, int is_disk) {
+	// usbstor#disk&ven_realtek&prod_driver_storage
 	// usbstor#cdrom&ven_realtek&prod_usb_disk_autorun
 	// usbstor#cdrom&ven_realtek&prod_driver_storage
 
 	DWORD dwBytes;
 	bool ret = false;
 
-	HANDLE hCDROM = CreateFile(path, GENERIC_READ | GENERIC_WRITE, 0, NULL, OPEN_EXISTING, 0, NULL);
-	if (hCDROM == INVALID_HANDLE_VALUE)
-	{
-		printf("Failed to open CDROM '%ws'\n", path);
-		return ret;
-	}
-
-	// IOCTL_STORAGE_EJECT_MEDIA?
-	if (DeviceIoControl(hCDROM, IOCTL_DISK_EJECT_MEDIA, NULL, 0, NULL, 0, &dwBytes, NULL)) {
-		printf("Ejected CDROM: '%ws'\n", path);
-		ret = true;
-	}
-	else {
-		printf("Failed to DeviceIoControl(%p, IOCTL_STORAGE_EJECT_MEDIA, ...): %08x\n", hCDROM, GetLastError());
-	}
-
-	CloseHandle(hCDROM);
-
-	return ret;
-}
-
-struct SCSI_PASS_THROUGH_DIRECT
-{
-	USHORT Length;
-	UCHAR ScsiStatus;
-	UCHAR PathId;
-	UCHAR TargetId;
-	UCHAR Lun;
-	UCHAR CdbLength;
-	UCHAR SenseInfoLength;
-	UCHAR DataIn;
-	ULONG DataTransferLength;
-	ULONG TimeOutValue;
-	VOID* POINTER_32 DataBuffer;
-	ULONG SenseInfoOffset;
-	UCHAR Cdb[16];
-};
-
-static bool _try_stop_disk_unit(LPCWSTR path) {
-	// usbstor#disk&ven_realtek&prod_driver_storage
-	DWORD dwBytes;
-	bool ret = false;
-
-	HANDLE hDISK = CreateFile(
+	HANDLE hDev = CreateFile(
 		path,
 		GENERIC_READ | GENERIC_WRITE | GENERIC_EXECUTE,
 		FILE_SHARE_READ | FILE_SHARE_WRITE,
@@ -167,28 +134,39 @@ static bool _try_stop_disk_unit(LPCWSTR path) {
 		NULL
 	);
 
-	if (hDISK == INVALID_HANDLE_VALUE)
+	if (hDev == INVALID_HANDLE_VALUE)
 	{
-		printf("Failed to open DISK '%ws'\n", path);
+		printf("Failed to open Device '%ws'\n", path);
 		return ret;
 	}
 
-	SCSI_PASS_THROUGH_DIRECT scsi = { 0 };
-	scsi.Length = sizeof(SCSI_PASS_THROUGH_DIRECT);
-	scsi.CdbLength = 6;
-	scsi.TimeOutValue = 10;
-	scsi.Cdb[0] = 0x1B; // SCSI: START STOP UNIT
-	scsi.Cdb[4] = 2;    // LOEJ WITH START BIT=0
+	if (is_disk) {
+		SCSI_PASS_THROUGH_DIRECT scsi = { 0 };
+		scsi.Length = sizeof(SCSI_PASS_THROUGH_DIRECT);
+		scsi.CdbLength = 6;
+		scsi.TimeOutValue = 10;
+		scsi.Cdb[0] = 0x1B; // SCSI: START STOP UNIT
+		scsi.Cdb[4] = 2;    // LOEJ WITH START BIT=0
 
-	if (DeviceIoControl(hDISK, IOCTL_SCSI_PASS_THROUGH_DIRECT, &scsi, sizeof(SCSI_PASS_THROUGH_DIRECT), NULL, 0, &dwBytes, NULL)) {
-		printf("Stop DISK: '%ws'\n", path);
-		ret = true;
+		if (DeviceIoControl(hDev, IOCTL_SCSI_PASS_THROUGH_DIRECT, &scsi, sizeof(SCSI_PASS_THROUGH_DIRECT), NULL, 0, &dwBytes, NULL)) {
+			printf("Stop DISK: '%ws'\n", path);
+			ret = true;
+		}
+		else {
+			printf("Failed to DeviceIoControl(%p, %s, ...): %08x\n", hDev, "IOCTL_SCSI_PASS_THROUGH_DIRECT", GetLastError());
+		}
 	}
 	else {
-		printf("Failed to DeviceIoControl(%p, IOCTL_SCSI_PASS_THROUGH_DIRECT, ...): %08x\n", hDISK, GetLastError());
+		if (DeviceIoControl(hDev, IOCTL_DISK_EJECT_MEDIA, NULL, 0, NULL, 0, &dwBytes, NULL)) {
+			printf("Ejected CDROM: '%ws'\n", path);
+			ret = true;
+		}
+		else {
+			printf("Failed to DeviceIoControl(%p, %s, ...): %08x\n", hDev, "IOCTL_STORAGE_EJECT_MEDIA", GetLastError());
+		}
 	}
 
-	CloseHandle(hDISK);
+	CloseHandle(hDev);
 
 	return ret;
 }
